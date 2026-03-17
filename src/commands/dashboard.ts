@@ -273,7 +273,7 @@ export async function dashboardCommand(): Promise<void> {
     // Set the window name to the session ID so it shows in the tmux status bar
     try {
       execFileSync("tmux", [
-        "rename-window", "-t", dashboardPaneId, session.id,
+        "rename-window", "-t", dashboardPaneId, `${session.id} (agentmux)`,
       ]);
     } catch { /* ignore */ }
 
