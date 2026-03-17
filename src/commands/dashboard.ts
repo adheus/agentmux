@@ -171,7 +171,7 @@ export async function dashboardCommand(): Promise<void> {
 
   // New session creation state
   let newSessionStep: "repo" | "identifier" | null = null;
-  let newSessionRepoChoices: string[] = [];
+  let newSessionRepoChoices: { label: string; value: string }[] = [];
   let newSessionRepoIndex = 0;
   let newSessionRepo: string | null = null;
   let newSessionInput = "";
@@ -206,6 +206,12 @@ export async function dashboardCommand(): Promise<void> {
     if (previewPaneId && paneExists(previewPaneId)) {
       killPane(previewPaneId);
     }
+    // Restore automatic window naming
+    try {
+      execFileSync("tmux", [
+        "set-option", "-w", "-t", dashboardPaneId, "automatic-rename", "on",
+      ]);
+    } catch { /* ignore */ }
     renderer.destroy();
   }
 
@@ -264,6 +270,13 @@ export async function dashboardCommand(): Promise<void> {
       }
     }
 
+    // Set the window name to the session ID so it shows in the tmux status bar
+    try {
+      execFileSync("tmux", [
+        "rename-window", "-t", dashboardPaneId, `${session.id} (agentmux)`,
+      ]);
+    } catch { /* ignore */ }
+
     focusDashboard();
   }
 
@@ -298,7 +311,7 @@ export async function dashboardCommand(): Promise<void> {
           const isSel = i === newSessionRepoIndex;
           children.push(
             Text({
-              content: `${isSel ? " ▸" : "  "} ${newSessionRepoChoices[i]}`,
+              content: `${isSel ? " ▸" : "  "} ${newSessionRepoChoices[i].label}`,
               fg: isSel ? "#ffffff" : "#888888",
               bg: isSel ? "#333366" : undefined,
             }),
@@ -460,7 +473,7 @@ export async function dashboardCommand(): Promise<void> {
           return;
         }
         if (key.name === "return") {
-          newSessionRepo = newSessionRepoChoices[newSessionRepoIndex];
+          newSessionRepo = newSessionRepoChoices[newSessionRepoIndex].value;
           newSessionStep = "identifier";
           newSessionInput = "";
           render();
@@ -684,13 +697,47 @@ export async function dashboardCommand(): Promise<void> {
       const config = loadConfig();
       const workspace = resolveWorkspacePath(config);
 
-      const aliasNames = Object.keys(config.aliases);
+      const aliases = config.aliases; // alias name -> relative path
       const scannedRepos = listWorkspaceRepos(workspace);
-      const allRepos = [...new Set([...aliasNames, ...scannedRepos])].sort();
 
-      if (allRepos.length === 0) return;
+      // Build a map of repo name -> alias name (reverse lookup)
+      const repoToAlias = new Map<string, string>();
+      for (const [alias, relPath] of Object.entries(aliases)) {
+        // The last segment of the alias path is typically the repo dir name
+        const repoName = path.basename(relPath);
+        repoToAlias.set(repoName, alias);
+        // Also map the alias itself in case it doesn't match a scanned repo
+        repoToAlias.set(alias, alias);
+      }
 
-      newSessionRepoChoices = allRepos;
+      // Build deduplicated choices
+      const seen = new Set<string>();
+      const choices: { label: string; value: string }[] = [];
+
+      for (const repo of scannedRepos) {
+        if (seen.has(repo)) continue;
+        seen.add(repo);
+        const alias = repoToAlias.get(repo);
+        if (alias && alias !== repo) {
+          choices.push({ label: `${alias} (${repo})`, value: alias });
+          seen.add(alias);
+        } else {
+          choices.push({ label: repo, value: repo });
+        }
+      }
+
+      // Add aliases that weren't found in workspace scan
+      for (const alias of Object.keys(aliases)) {
+        if (seen.has(alias)) continue;
+        seen.add(alias);
+        choices.push({ label: alias, value: alias });
+      }
+
+      choices.sort((a, b) => a.label.localeCompare(b.label));
+
+      if (choices.length === 0) return;
+
+      newSessionRepoChoices = choices;
       newSessionRepoIndex = 0;
       newSessionStep = "repo";
       newSessionInput = "";
