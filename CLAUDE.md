@@ -63,7 +63,7 @@ No test framework is configured yet.
 - `c` — New container session
 - `e` — Open editor (neovim) pane alongside selected session
 - `t` — Open terminal pane alongside selected session
-- `o` — Create new workspace
+- `w` — Create new workspace
 - `a` — Attach session to workspace (works on workspace row or any of its members)
 - `d` — Detach session from workspace
 - `x` — Kill session or delete workspace

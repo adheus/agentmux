@@ -623,7 +623,7 @@ export async function dashboardCommand(): Promise<void> {
         children.push(Text({ content: " j/k navigate", fg: "#555555" }));
         children.push(Text({ content: " l/h expand/collapse", fg: "#555555" }));
         children.push(Text({ content: " Enter attach", fg: "#555555" }));
-        children.push(Text({ content: " n new session  o new workspace", fg: "#555555" }));
+        children.push(Text({ content: " n new session  w new workspace", fg: "#555555" }));
         children.push(Text({ content: " c container    a attach to workspace", fg: "#555555" }));
         children.push(Text({ content: " e editor       d detach from workspace", fg: "#555555" }));
         children.push(Text({ content: " t terminal     x kill/delete", fg: "#555555" }));
@@ -1109,7 +1109,7 @@ export async function dashboardCommand(): Promise<void> {
 
       const type: SubPane["type"] = key.name === "e" ? "editor" : "terminal";
       try {
-        const newPaneId = smartSplitAt(targetPaneId, session.worktreePath);
+        const newPaneId = smartSplitAt(targetPaneId, session.worktreePath, [dashboardPaneId]);
         setPaneTitle(newPaneId, `${session.id} [${type}]`);
         if (type === "editor") {
           sendKeys(newPaneId, "nvim .");
@@ -1120,7 +1120,7 @@ export async function dashboardCommand(): Promise<void> {
       return;
     }
 
-    if (key.name === "o") {
+    if (key.name === "w") {
       // Create a new workspace
       workspaceStep = "name";
       workspaceInput = "";

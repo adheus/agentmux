@@ -196,12 +196,18 @@ export function getWindowPaneIds(targetPane: string): string[] {
  * Smart split targeting a specific pane's window.
  * Uses the same layout logic as smartSplit but operates on the window
  * containing the given pane rather than the current window.
+ *
+ * @param excludePanes - Pane IDs to exclude from the count (e.g. the dashboard pane).
+ *                       These panes are ignored when deciding which layout step to use.
  */
 export function smartSplitAt(
   targetPane: string,
   cwd: string,
+  excludePanes: string[] = [],
 ): string {
-  const panes = getWindowPaneIds(targetPane);
+  const allPanes = getWindowPaneIds(targetPane);
+  const excludeSet = new Set(excludePanes);
+  const panes = allPanes.filter((p) => !excludeSet.has(p));
   const paneCount = panes.length;
 
   let direction: "h" | "v";
