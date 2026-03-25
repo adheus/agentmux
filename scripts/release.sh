@@ -7,47 +7,19 @@ if [ -z "$VERSION" ]; then
 fi
 
 TAG="v${VERSION}"
-DIST="dist/release"
-TARGETS=(
-  "bun-darwin-arm64"
-  "bun-darwin-x64"
-  "bun-linux-arm64"
-  "bun-linux-x64"
-)
 
-echo "Building cereus ${TAG} for ${#TARGETS[@]} targets..."
+echo "Releasing cereus ${TAG}..."
 
-rm -rf "$DIST"
-mkdir -p "$DIST"
-
-for target in "${TARGETS[@]}"; do
-  # Extract os and arch from target string (e.g., bun-darwin-arm64 -> darwin-arm64)
-  suffix="${target#bun-}"
-  outfile="${DIST}/cereus-${suffix}"
-
-  echo "  Building ${suffix}..."
-  bun build --compile --minify --target="$target" src/index.ts --outfile "$outfile"
-done
-
-echo ""
-echo "Binaries:"
-ls -lh "$DIST"/
-
-echo ""
-echo "Creating GitHub release ${TAG}..."
-
-# Create the tag if it doesn't exist
-if ! git rev-parse "$TAG" >/dev/null 2>&1; then
-  git tag "$TAG"
-  git push origin "$TAG"
+# Create and push the tag — CI builds binaries and creates the release
+if git rev-parse "$TAG" >/dev/null 2>&1; then
+  echo "Tag ${TAG} already exists."
+  exit 1
 fi
 
-# Create the release and upload all binaries
-gh release create "$TAG" \
-  --title "cereus ${TAG}" \
-  --generate-notes \
-  "${DIST}"/cereus-*
+git tag "$TAG"
+git push origin "$TAG"
 
 echo ""
-echo "Release ${TAG} created!"
-echo "https://github.com/adheus/cereus/releases/tag/${TAG}"
+echo "Tag ${TAG} pushed. GitHub Actions will build binaries and create the release."
+echo "Watch progress: gh run watch"
+echo "Release URL: https://github.com/adheus/cereus/releases/tag/${TAG}"

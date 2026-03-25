@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+            target: bun-darwin-arm64
+            suffix: darwin-arm64
+          - os: macos-13
+            arch: x64
+            target: bun-darwin-x64
+            suffix: darwin-x64
+          - os: ubuntu-latest
+            arch: arm64
+            target: bun-linux-arm64
+            suffix: linux-arm64
+          - os: ubuntu-latest
+            arch: x64
+            target: bun-linux-x64
+            suffix: linux-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install
+
+      - name: Build native binary
+        run: bun build --compile --minify --target=${{ matrix.target }} src/index.ts --outfile dist/cereus-${{ matrix.suffix }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cereus-${{ matrix.suffix }}
+          path: dist/cereus-${{ matrix.suffix }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x artifacts/cereus-*
+          gh release create "${{ github.ref_name }}" \
+            --title "cereus ${{ github.ref_name }}" \
+            --generate-notes \
+            artifacts/cereus-*
