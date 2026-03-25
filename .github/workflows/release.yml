@@ -11,23 +11,16 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
-            arch: arm64
-            target: bun-darwin-arm64
             suffix: darwin-arm64
-          - os: macos-13
-            arch: x64
-            target: bun-darwin-x64
+          - os: macos-13-xlarge
             suffix: darwin-x64
-          - os: ubuntu-latest
-            arch: arm64
-            target: bun-linux-arm64
+          - os: ubuntu-24.04-arm
             suffix: linux-arm64
           - os: ubuntu-latest
-            arch: x64
-            target: bun-linux-x64
             suffix: linux-x64
 
     runs-on: ${{ matrix.os }}
@@ -42,7 +35,7 @@ jobs:
       - run: bun install
 
       - name: Build native binary
-        run: bun build --compile --minify --target=${{ matrix.target }} src/index.ts --outfile dist/cereus-${{ matrix.suffix }}
+        run: bun build --compile --minify src/index.ts --outfile dist/cereus-${{ matrix.suffix }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -59,9 +52,6 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-
-      - name: List artifacts
-        run: ls -lh artifacts/
 
       - name: Create release
         env:
