@@ -6,6 +6,19 @@ import { killCommand } from "./commands/kill.js";
 import { aliasAdd, aliasList, aliasRemove } from "./commands/alias.js";
 import { configShow, configSet, runSetup } from "./commands/config.js";
 import { dashboardCommand } from "./commands/dashboard.js";
+import {
+  paneAddCommand,
+  paneListCommand,
+  paneRemoveCommand,
+} from "./commands/pane.js";
+import {
+  overviewCreateCommand,
+  overviewListCommand,
+  overviewShowCommand,
+  overviewAttachCommand,
+  overviewDetachCommand,
+  overviewDeleteCommand,
+} from "./commands/overview.js";
 
 const program = new Command();
 
@@ -14,7 +27,7 @@ program
   .description(
     "Parallel AI coding sessions with git worktrees + tmux + agents",
   )
-  .version("0.1.0");
+  .version("0.2.0");
 
 program
   .command("new")
@@ -59,6 +72,78 @@ program
   .alias("dash")
   .description("Open TUI dashboard for managing sessions")
   .action(dashboardCommand);
+
+const pane = program
+  .command("pane")
+  .description("Manage sub-panes within a session");
+
+pane
+  .command("add")
+  .description("Add a sub-pane (editor or terminal) to a session")
+  .argument("<session>", "Session identifier")
+  .option("--type <type>", "Pane type: editor, terminal", "terminal")
+  .option("--direction <dir>", "Split direction: h or v")
+  .action(paneAddCommand);
+
+pane
+  .command("list")
+  .alias("ls")
+  .description("List sub-panes for a session")
+  .argument("<session>", "Session identifier")
+  .action(paneListCommand);
+
+pane
+  .command("remove")
+  .alias("rm")
+  .description("Remove a sub-pane from a session")
+  .argument("<session>", "Session identifier")
+  .argument("<pane-id>", "Pane ID to remove")
+  .action(paneRemoveCommand);
+
+const overview = program
+  .command("overview")
+  .alias("ov")
+  .description("Manage session overviews");
+
+overview
+  .command("create")
+  .description("Create a new overview")
+  .argument("<name>", "Overview name")
+  .option("--max-panes <n>", "Maximum panes in the overview", parseInt)
+  .action(overviewCreateCommand);
+
+overview
+  .command("list")
+  .alias("ls")
+  .description("List all overviews")
+  .action(overviewListCommand);
+
+overview
+  .command("show")
+  .description("Open an overview (arrange session panes)")
+  .argument("<name>", "Overview name")
+  .action(overviewShowCommand);
+
+overview
+  .command("attach")
+  .description("Attach a session to an overview")
+  .argument("<name>", "Overview name")
+  .argument("<session>", "Session identifier")
+  .action(overviewAttachCommand);
+
+overview
+  .command("detach")
+  .description("Detach a session from an overview")
+  .argument("<name>", "Overview name")
+  .argument("<session>", "Session identifier")
+  .action(overviewDetachCommand);
+
+overview
+  .command("delete")
+  .alias("rm")
+  .description("Delete an overview")
+  .argument("<name>", "Overview name")
+  .action(overviewDeleteCommand);
 
 const alias = program
   .command("alias")

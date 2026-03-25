@@ -24,6 +24,8 @@ import {
   sessionExists,
   smartSplit,
   splitPane,
+  setPaneTitle,
+  setSessionPaneBorderStatus,
 } from "../lib/tmux.js";
 import { writeContextFile } from "../lib/context.js";
 import {
@@ -115,12 +117,14 @@ export async function newCommand(
       console.log(chalk.blue("▸"), "Smart splitting...");
       if (!isInsideTmux()) {
         createSession(tmuxName, worktreePath);
+        setPaneTitle(tmuxName, identifier);
         sendKeys(tmuxName, agentCmd);
         console.log(chalk.green("✔"), `Session '${identifier}' started (new tmux session — not inside tmux)`);
         console.log(`\n  attach:  cereus attach ${identifier}\n`);
       } else {
         const result = smartSplit(worktreePath, config.maxPanesPerWindow, identifier);
         tmuxPane = result.paneId;
+        setPaneTitle(tmuxPane, identifier);
         sendKeys(tmuxPane, agentCmd);
         if (result.createdWindow) {
           console.log(chalk.green("✔"), `Session '${identifier}' started (new window — panes full)`);
@@ -137,6 +141,7 @@ export async function newCommand(
         process.exit(1);
       }
       tmuxPane = splitPane(worktreePath, "h");
+      setPaneTitle(tmuxPane, identifier);
       sendKeys(tmuxPane, agentCmd);
       console.log(chalk.green("✔"), `Session '${identifier}' started (split)`);
       break;
@@ -144,6 +149,7 @@ export async function newCommand(
 
     case "hidden": {
       createSession(tmuxName, worktreePath);
+      setPaneTitle(tmuxName, identifier);
       sendKeys(tmuxName, agentCmd);
       console.log(chalk.green("✔"), `Session '${identifier}' started (hidden)`);
       console.log(`\n  attach:  cereus attach ${identifier}`);
@@ -153,6 +159,7 @@ export async function newCommand(
 
     case "window": {
       createSession(tmuxName, worktreePath);
+      setPaneTitle(tmuxName, identifier);
       sendKeys(tmuxName, agentCmd);
       if (isInsideTmux()) {
         console.log(chalk.green("✔"), `Session '${identifier}' started`);

@@ -4,7 +4,9 @@ import {
   loadSessions,
   addSession,
   removeSession,
+  addSubPane,
   type Session,
+  type SubPane,
 } from "../lib/sessions.js";
 import {
   isInsideTmux,
@@ -14,6 +16,8 @@ import {
   killSession,
   sendKeys,
   capturePaneOutput,
+  setSessionPaneBorderStatus,
+  setPaneTitle,
 } from "../lib/tmux.js";
 import {
   loadConfig,
@@ -29,19 +33,32 @@ import {
   buildContainerAgentCommand,
   stopContainer,
 } from "../lib/container.js";
+import {
+  loadOverviews,
+  addOverview,
+  findOverview,
+  attachSessionToOverview,
+  detachSessionFromOverview,
+  removeOverview,
+  updateOverview,
+  type Overview,
+} from "../lib/overviews.js";
 import { execFileSync } from "node:child_process";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 interface RepoGroup {
   repo: string;
   sessions: Session[];
 }
 
-// A navigable row is either a repo header or a session
+// A navigable row is a repo header, session, overview header, overview, or overview member
 type NavRow =
   | { type: "repo"; repo: string }
-  | { type: "session"; session: Session };
+  | { type: "session"; session: Session }
+  | { type: "overview-header" }
+  | { type: "overview"; overview: Overview }
+  | { type: "overview-member"; overview: Overview; session: Session };
 
 function groupByRepo(sessions: Session[]): RepoGroup[] {
   const map = new Map<string, Session[]>();
@@ -56,7 +73,7 @@ function groupByRepo(sessions: Session[]): RepoGroup[] {
   }));
 }
 
-function refreshSessions(): RepoGroup[] {
+function refreshSessions(): { groups: RepoGroup[]; allSessions: Session[] } {
   const sessions = loadSessions();
   for (const s of sessions) {
     const alive = s.tmuxPane
@@ -64,13 +81,15 @@ function refreshSessions(): RepoGroup[] {
       : sessionExists(s.tmuxSession);
     s.status = alive ? "running" : "stopped";
   }
-  return groupByRepo(sessions);
+  return { groups: groupByRepo(sessions), allSessions: sessions };
 }
 
 /** Build the flat navigable list from groups, respecting collapsed repos */
 function buildNavRows(
   groups: RepoGroup[],
   collapsedRepos: Set<string>,
+  expandedOverviews: Set<string>,
+  allSessions: Session[],
 ): NavRow[] {
   const rows: NavRow[] = [];
   for (const group of groups) {
@@ -81,6 +100,23 @@ function buildNavRows(
       }
     }
   }
+
+  const overviews = loadOverviews();
+  if (overviews.length > 0) {
+    rows.push({ type: "overview-header" });
+    for (const ov of overviews) {
+      rows.push({ type: "overview", overview: ov });
+      if (expandedOverviews.has(ov.id)) {
+        for (const sid of ov.sessionIds) {
+          const session = allSessions.find((s) => s.id === sid);
+          if (session) {
+            rows.push({ type: "overview-member", overview: ov, session });
+          }
+        }
+      }
+    }
+  }
+
   return rows;
 }
 
@@ -170,9 +206,11 @@ export async function dashboardCommand(): Promise<void> {
   let swappedSessionId: string | null = null;
   const expandedSessions = new Set<string>();
   const collapsedRepos = new Set<string>();
+  const expandedOverviews = new Set<string>();
 
   // Navigation list (rebuilt on each render)
   let groups: RepoGroup[] = [];
+  let allSessions: Session[] = [];
   let navRows: NavRow[] = [];
 
   // Kill confirmation state
@@ -185,6 +223,22 @@ export async function dashboardCommand(): Promise<void> {
   let newSessionRepo: string | null = null;
   let newSessionInput = "";
   let newSessionContainer = false;
+
+  // Overview creation state
+  let overviewStep: "name" | "attach-pick" | null = null;
+  let overviewInput = "";
+  let overviewAttachTarget: Overview | null = null;
+  let overviewAttachChoices: { label: string; session: Session }[] = [];
+  let overviewAttachIndex = 0;
+
+  // Sub-pane creation state
+  let subPaneStep: "type" | null = null;
+  let subPaneSessionId: string | null = null;
+  let subPaneTypeIndex = 0;
+  const subPaneTypes: { label: string; value: SubPane["type"] }[] = [
+    { label: "Terminal", value: "terminal" },
+    { label: "Editor (nvim)", value: "editor" },
+  ];
 
   // Activity detection state
   const POLL_INTERVAL_MS = 3000;
@@ -334,8 +388,10 @@ export async function dashboardCommand(): Promise<void> {
       renderer.root.remove(CONTAINER_ID);
     } catch { /* first render */ }
 
-    groups = refreshSessions();
-    navRows = buildNavRows(groups, collapsedRepos);
+    const refreshed = refreshSessions();
+    groups = refreshed.groups;
+    allSessions = refreshed.allSessions;
+    navRows = buildNavRows(groups, collapsedRepos, expandedOverviews, allSessions);
 
     if (selectedIndex >= navRows.length) selectedIndex = navRows.length - 1;
     if (selectedIndex < 0) selectedIndex = 0;
@@ -352,7 +408,62 @@ export async function dashboardCommand(): Promise<void> {
       Text({ content: "" }),
     ];
 
-    if (newSessionStep) {
+    if (subPaneStep) {
+      // --- Sub-pane creation UI ---
+      children.push(Text({ content: ` ADD PANE TO '${subPaneSessionId}'`, fg: "#00ff00" }));
+      children.push(Text({ content: "" }));
+      children.push(Text({ content: " Select type:", fg: "#cccccc" }));
+      children.push(Text({ content: "" }));
+      for (let i = 0; i < subPaneTypes.length; i++) {
+        const isSel = i === subPaneTypeIndex;
+        children.push(
+          Text({
+            content: `${isSel ? " ▸" : "  "} ${subPaneTypes[i].label}`,
+            fg: isSel ? "#ffffff" : "#888888",
+            bg: isSel ? "#333366" : undefined,
+          }),
+        );
+      }
+      children.push(Box({ flexGrow: 1 }));
+      children.push(Text({ content: " j/k navigate", fg: "#555555" }));
+      children.push(Text({ content: " Enter confirm", fg: "#555555" }));
+      children.push(Text({ content: " Esc cancel", fg: "#555555" }));
+    } else if (overviewStep) {
+      // --- Overview creation / attach UI ---
+      if (overviewStep === "name") {
+        children.push(Text({ content: " NEW OVERVIEW", fg: "#00ff00" }));
+        children.push(Text({ content: "" }));
+        children.push(Text({ content: " Overview name:", fg: "#cccccc" }));
+        children.push(
+          Text({ content: ` > ${overviewInput}_`, fg: "#ffffff" }),
+        );
+        children.push(Box({ flexGrow: 1 }));
+        children.push(Text({ content: " Enter confirm", fg: "#555555" }));
+        children.push(Text({ content: " Esc cancel", fg: "#555555" }));
+      } else if (overviewStep === "attach-pick") {
+        children.push(Text({ content: ` ATTACH TO '${overviewAttachTarget?.name}'`, fg: "#00ff00" }));
+        children.push(Text({ content: "" }));
+        children.push(Text({ content: " Select session:", fg: "#cccccc" }));
+        children.push(Text({ content: "" }));
+        for (let i = 0; i < overviewAttachChoices.length; i++) {
+          const isSel = i === overviewAttachIndex;
+          children.push(
+            Text({
+              content: `${isSel ? " ▸" : "  "} ${overviewAttachChoices[i].label}`,
+              fg: isSel ? "#ffffff" : "#888888",
+              bg: isSel ? "#333366" : undefined,
+            }),
+          );
+        }
+        if (overviewAttachChoices.length === 0) {
+          children.push(Text({ content: "  No available sessions", fg: "#555555" }));
+        }
+        children.push(Box({ flexGrow: 1 }));
+        children.push(Text({ content: " j/k navigate", fg: "#555555" }));
+        children.push(Text({ content: " Enter confirm", fg: "#555555" }));
+        children.push(Text({ content: " Esc cancel", fg: "#555555" }));
+      }
+    } else if (newSessionStep) {
       // --- New session creation UI ---
       const sessionTypeLabel = newSessionContainer ? " NEW CONTAINER SESSION" : " NEW SESSION";
       children.push(Text({ content: sessionTypeLabel, fg: "#00ff00" }));
@@ -409,7 +520,7 @@ export async function dashboardCommand(): Promise<void> {
                 bg: isSelected ? "#333366" : undefined,
               }),
             );
-          } else {
+          } else if (row.type === "session") {
             const session = row.session;
             const isExpanded = expandedSessions.has(session.id);
             const activity = getActivityStatus(session);
@@ -476,7 +587,55 @@ export async function dashboardCommand(): Promise<void> {
                   }),
                 );
               }
+              if (session.panes && session.panes.length > 0) {
+                children.push(
+                  Text({ content: `       Panes:`, fg: dim }),
+                );
+                for (const p of session.panes) {
+                  const alive = paneExists(p.paneId);
+                  const icon = alive ? "●" : "○";
+                  const color = alive ? "#00ff00" : "#ff4444";
+                  children.push(
+                    Text({
+                      content: `         ${icon} ${p.paneId} [${p.type}]`,
+                      fg: color,
+                    }),
+                  );
+                }
+              }
             }
+          } else if (row.type === "overview-header") {
+            children.push(Text({ content: "" }));
+            children.push(
+              Text({
+                content: " OVERVIEWS",
+                fg: "#8888ff",
+              }),
+            );
+            children.push(Text({ content: "" }));
+          } else if (row.type === "overview") {
+            const ov = row.overview;
+            const isExpanded = expandedOverviews.has(ov.id);
+            const arrow = isExpanded ? "▾" : "▸";
+            const count = ov.sessionIds.length;
+            children.push(
+              Text({
+                content: `  ${isSelected ? arrow : " "} ${ov.name} (${count} session${count !== 1 ? "s" : ""})`,
+                fg: isSelected ? "#ffffff" : "#aa88ff",
+                bg: isSelected ? "#333366" : undefined,
+              }),
+            );
+          } else if (row.type === "overview-member") {
+            const session = row.session;
+            const statusColor = session.status === "running" ? "#00ff00" : "#ff4444";
+            const icon = session.status === "running" ? "●" : "○";
+            children.push(
+              Text({
+                content: `      ${icon} ${session.id}`,
+                fg: isSelected ? "#ffffff" : statusColor,
+                bg: isSelected ? "#333366" : undefined,
+              }),
+            );
           }
         }
       }
@@ -492,11 +651,10 @@ export async function dashboardCommand(): Promise<void> {
         children.push(Text({ content: " j/k navigate", fg: "#555555" }));
         children.push(Text({ content: " l/h expand/collapse", fg: "#555555" }));
         children.push(Text({ content: " Enter attach", fg: "#555555" }));
-        children.push(Text({ content: " n new session", fg: "#555555" }));
-        children.push(Text({ content: " c new container session", fg: "#555555" }));
-        children.push(Text({ content: " x kill session", fg: "#555555" }));
-        children.push(Text({ content: " r refresh", fg: "#555555" }));
-        children.push(Text({ content: " q quit", fg: "#555555" }));
+        children.push(Text({ content: " n new session  o new overview", fg: "#555555" }));
+        children.push(Text({ content: " c container    a attach to overview", fg: "#555555" }));
+        children.push(Text({ content: " p add pane     d detach from overview", fg: "#555555" }));
+        children.push(Text({ content: " x kill/delete  r refresh  q quit", fg: "#555555" }));
       }
     }
 
@@ -567,6 +725,137 @@ export async function dashboardCommand(): Promise<void> {
 
   // Keyboard handling
   renderer.keyInput.on("keypress", (key: KeyEvent) => {
+    // --- Overview creation / attach flow ---
+    if (overviewStep) {
+      if (key.name === "escape") {
+        overviewStep = null;
+        overviewInput = "";
+        overviewAttachTarget = null;
+        render();
+        return;
+      }
+
+      if (overviewStep === "name") {
+        if (key.name === "return" && overviewInput.trim()) {
+          const name = overviewInput.trim();
+          const config = loadConfig();
+          const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+          const ov: Overview = {
+            id: `ov_${slug}`,
+            name,
+            sessionIds: [],
+            maxPanes: config.maxPanesPerWindow,
+          };
+          addOverview(ov);
+          overviewStep = null;
+          overviewInput = "";
+          render();
+          return;
+        }
+        if (key.name === "backspace") {
+          overviewInput = overviewInput.slice(0, -1);
+          render();
+          return;
+        }
+        if (
+          key.sequence &&
+          key.sequence.length === 1 &&
+          /[a-zA-Z0-9_ -]/.test(key.sequence) &&
+          !key.ctrl &&
+          !key.meta
+        ) {
+          overviewInput += key.sequence;
+          render();
+          return;
+        }
+        return;
+      }
+
+      if (overviewStep === "attach-pick") {
+        if (key.name === "j" || key.name === "down") {
+          if (overviewAttachIndex < overviewAttachChoices.length - 1) {
+            overviewAttachIndex++;
+            render();
+          }
+          return;
+        }
+        if (key.name === "k" || key.name === "up") {
+          if (overviewAttachIndex > 0) {
+            overviewAttachIndex--;
+            render();
+          }
+          return;
+        }
+        if (key.name === "return" && overviewAttachTarget && overviewAttachChoices.length > 0) {
+          const session = overviewAttachChoices[overviewAttachIndex].session;
+          attachSessionToOverview(overviewAttachTarget.id, session.id);
+          overviewStep = null;
+          overviewAttachTarget = null;
+          render();
+          return;
+        }
+        return;
+      }
+
+      return;
+    }
+
+    // --- Sub-pane creation flow ---
+    if (subPaneStep) {
+      if (key.name === "escape") {
+        subPaneStep = null;
+        subPaneSessionId = null;
+        render();
+        return;
+      }
+      if (key.name === "j" || key.name === "down") {
+        if (subPaneTypeIndex < subPaneTypes.length - 1) {
+          subPaneTypeIndex++;
+          render();
+        }
+        return;
+      }
+      if (key.name === "k" || key.name === "up") {
+        if (subPaneTypeIndex > 0) {
+          subPaneTypeIndex--;
+          render();
+        }
+        return;
+      }
+      if (key.name === "return" && subPaneSessionId) {
+        const session = loadSessions().find((s) => s.id === subPaneSessionId);
+        if (session && session.status === "running") {
+          const targetPaneId = resolveSessionPaneId(session);
+          if (targetPaneId) {
+            const type = subPaneTypes[subPaneTypeIndex].value;
+            const direction = type === "editor" ? "v" : "h";
+            try {
+              const output = execFileSync(
+                "tmux",
+                [
+                  "split-window", `-${direction}`, "-t", targetPaneId,
+                  "-c", session.worktreePath,
+                  "-P", "-F", "#{pane_id}",
+                ],
+                { encoding: "utf-8" },
+              ).trim();
+              const title = `${session.id} [${type}]`;
+              setPaneTitle(output, title);
+              if (type === "editor") {
+                sendKeys(output, "nvim .");
+              }
+              addSubPane(session.id, { paneId: output, type });
+            } catch { /* ignore */ }
+          }
+        }
+        subPaneStep = null;
+        subPaneSessionId = null;
+        render();
+        return;
+      }
+      return;
+    }
+
     // --- New session creation flow ---
     if (newSessionStep) {
       if (key.name === "escape") {
@@ -670,6 +959,8 @@ export async function dashboardCommand(): Promise<void> {
               ["new-session", "-d", "-s", tmuxName, "-c", worktreePath],
               { stdio: "ignore" },
             );
+            setSessionPaneBorderStatus(tmuxName);
+            setPaneTitle(tmuxName, identifier);
           } catch { /* ignore */ }
 
           const rawAgentCmd = [agent, ...config.agentArgs].join(" ");
@@ -703,8 +994,10 @@ export async function dashboardCommand(): Promise<void> {
           newSessionContainer = false;
 
           // Re-render and select the new session
-          groups = refreshSessions();
-          navRows = buildNavRows(groups, collapsedRepos);
+          const newRefreshed = refreshSessions();
+          groups = newRefreshed.groups;
+          allSessions = newRefreshed.allSessions;
+          navRows = buildNavRows(groups, collapsedRepos, expandedOverviews, allSessions);
           const newIdx = navRows.findIndex(
             (r) => r.type === "session" && r.session.id === identifier,
           );
@@ -758,6 +1051,13 @@ export async function dashboardCommand(): Promise<void> {
             previewPaneId = null;
             displacedPaneId = null;
             swappedSessionId = null;
+          }
+
+          // Kill sub-panes first
+          if (session.panes) {
+            for (const sub of session.panes) {
+              if (sub.type !== "agent") killPane(sub.paneId);
+            }
           }
 
           if (session.tmuxPane) {
@@ -820,9 +1120,14 @@ export async function dashboardCommand(): Promise<void> {
           collapsedRepos.delete(row.repo);
           render();
         }
-      } else {
+      } else if (row.type === "session") {
         if (!expandedSessions.has(row.session.id)) {
           expandedSessions.add(row.session.id);
+          render();
+        }
+      } else if (row.type === "overview") {
+        if (!expandedOverviews.has(row.overview.id)) {
+          expandedOverviews.add(row.overview.id);
           render();
         }
       }
@@ -838,9 +1143,14 @@ export async function dashboardCommand(): Promise<void> {
           collapsedRepos.add(row.repo);
           render();
         }
-      } else {
+      } else if (row.type === "session") {
         if (expandedSessions.has(row.session.id)) {
           expandedSessions.delete(row.session.id);
+          render();
+        }
+      } else if (row.type === "overview") {
+        if (expandedOverviews.has(row.overview.id)) {
+          expandedOverviews.delete(row.overview.id);
           render();
         }
       }
@@ -849,8 +1159,83 @@ export async function dashboardCommand(): Promise<void> {
 
     if (key.name === "x") {
       const row = navRows[selectedIndex];
+      if (!row) return;
+      if (row.type === "session") {
+        killConfirmSessionId = row.session.id;
+        render();
+        return;
+      }
+      if (row.type === "overview") {
+        // Delete the overview (no kill confirmation needed, it's just metadata)
+        const ov = row.overview;
+        if (ov.tmuxSession && sessionExists(ov.tmuxSession)) {
+          killSession(ov.tmuxSession);
+        }
+        removeOverview(ov.id);
+        expandedOverviews.delete(ov.id);
+        render();
+        return;
+      }
+      return;
+    }
+
+    if (key.name === "p") {
+      const row = navRows[selectedIndex];
       if (!row || row.type !== "session") return;
-      killConfirmSessionId = row.session.id;
+      if (row.session.status !== "running") return;
+      subPaneSessionId = row.session.id;
+      subPaneTypeIndex = 0;
+      subPaneStep = "type";
+      render();
+      return;
+    }
+
+    if (key.name === "o") {
+      // Create a new overview
+      overviewStep = "name";
+      overviewInput = "";
+      render();
+      return;
+    }
+
+    if (key.name === "a") {
+      // Attach session to overview (only when an overview row is selected)
+      const row = navRows[selectedIndex];
+      if (!row || row.type !== "overview") return;
+      const ov = findOverview(row.overview.id);
+      if (!ov) return;
+      if (ov.sessionIds.length >= ov.maxPanes) return;
+
+      // Build list of running sessions not already in this overview and not in another overview
+      const allOvs = loadOverviews();
+      const sessionsInOtherOverviews = new Set<string>();
+      for (const o of allOvs) {
+        if (o.id !== ov.id) {
+          for (const sid of o.sessionIds) sessionsInOtherOverviews.add(sid);
+        }
+      }
+
+      const choices = allSessions
+        .filter((s) =>
+          s.status === "running" &&
+          !ov.sessionIds.includes(s.id) &&
+          !sessionsInOtherOverviews.has(s.id)
+        )
+        .map((s) => ({ label: `${s.id} (${s.repo})`, session: s }));
+
+      overviewAttachTarget = ov;
+      overviewAttachChoices = choices;
+      overviewAttachIndex = 0;
+      overviewStep = "attach-pick";
+      render();
+      return;
+    }
+
+    if (key.name === "d") {
+      // Detach session from overview (only when an overview-member row is selected)
+      const row = navRows[selectedIndex];
+      if (!row || row.type !== "overview-member") return;
+      detachSessionFromOverview(row.overview.id, row.session.id);
       render();
       return;
     }
@@ -930,7 +1315,22 @@ export async function dashboardCommand(): Promise<void> {
         return;
       }
 
-      const session = row.session;
+      // Enter on overview header — no-op
+      if (row.type === "overview-header") return;
+
+      // Enter on overview — toggle expand
+      if (row.type === "overview") {
+        if (expandedOverviews.has(row.overview.id)) {
+          expandedOverviews.delete(row.overview.id);
+        } else {
+          expandedOverviews.add(row.overview.id);
+        }
+        render();
+        return;
+      }
+
+      // Enter on overview-member — attach/preview that session
+      const session = row.type === "overview-member" ? row.session : row.session;
 
       // Restart stopped sessions: re-create tmux session and launch agent
       if (session.status !== "running") {
@@ -943,6 +1343,8 @@ export async function dashboardCommand(): Promise<void> {
             ["new-session", "-d", "-s", tmuxName, "-c", session.worktreePath],
             { stdio: "ignore" },
           );
+          setSessionPaneBorderStatus(tmuxName);
+          setPaneTitle(tmuxName, session.id);
         } catch { /* ignore */ }
 
         const agentCmd = [session.agent, ...config.agentArgs].join(" ");

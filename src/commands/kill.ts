@@ -40,6 +40,15 @@ export async function killCommand(
     if (!yes) return;
   }
 
+  // Kill sub-panes first
+  if (session.panes) {
+    for (const sub of session.panes) {
+      if (sub.type !== "agent") {
+        killPane(sub.paneId);
+      }
+    }
+  }
+
   if (session.tmuxPane) {
     killPane(session.tmuxPane);
     console.log(chalk.green("✔"), `Pane '${session.tmuxPane}' killed.`);
@@ -96,6 +105,11 @@ async function killAll(options: KillOptions): Promise<void> {
   }
 
   for (const session of sessions) {
+    if (session.panes) {
+      for (const sub of session.panes) {
+        if (sub.type !== "agent") killPane(sub.paneId);
+      }
+    }
     if (session.tmuxPane) {
       killPane(session.tmuxPane);
     } else {

@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { getCereusDir, ensureCereusDir } from "./config.js";
 
+export interface SubPane {
+  paneId: string;
+  type: "agent" | "editor" | "terminal";
+}
+
 export interface Session {
   id: string;
   repo: string;
@@ -14,6 +19,7 @@ export interface Session {
   prompt?: string;
   mode: "smart" | "window" | "split" | "hidden";
   container?: boolean;
+  panes?: SubPane[];
   status: "running" | "stopped";
   createdAt: string;
 }
@@ -58,6 +64,31 @@ export function updateSession(
     sessions[idx] = { ...sessions[idx], ...update };
     saveSessions(sessions);
   }
+}
+
+export function addSubPane(sessionId: string, subPane: SubPane): void {
+  const sessions = loadSessions();
+  const session = sessions.find((s) => s.id === sessionId);
+  if (session) {
+    session.panes = session.panes || [];
+    session.panes.push(subPane);
+    saveSessions(sessions);
+  }
+}
+
+export function removeSubPane(sessionId: string, paneId: string): void {
+  const sessions = loadSessions();
+  const session = sessions.find((s) => s.id === sessionId);
+  if (session && session.panes) {
+    session.panes = session.panes.filter((p) => p.paneId !== paneId);
+    saveSessions(sessions);
+  }
+}
+
+export function getAgentPane(session: Session): string | undefined {
+  const agentSub = session.panes?.find((p) => p.type === "agent");
+  if (agentSub) return agentSub.paneId;
+  return session.tmuxPane;
 }
 
 export function getSessionsFilePath(): string {

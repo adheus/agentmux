@@ -1,6 +1,6 @@
 {
   "name": "cereus",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Parallel AI coding sessions with git worktrees + tmux + agents",
   "type": "module",
   "bin": {
@@ -12,6 +12,8 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsup",
+    "build:native": "bun build --compile --minify src/index.ts --outfile dist/cereus",
+    "release": "bash scripts/release.sh",
     "lint": "tsc --noEmit",
     "prepublishOnly": "bun run build"
   },

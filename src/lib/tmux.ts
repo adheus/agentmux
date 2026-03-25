@@ -21,6 +21,7 @@ export function createSession(name: string, cwd: string): void {
   execFileSync("tmux", ["new-session", "-d", "-s", name, "-c", cwd], {
     stdio: "ignore",
   });
+  setSessionPaneBorderStatus(name);
 }
 
 export function sendKeys(target: string, keys: string): void {
@@ -178,6 +179,31 @@ export function capturePaneOutput(target: string, lines = 500): string {
     );
   } catch {
     return "";
+  }
+}
+
+export function setSessionPaneBorderStatus(
+  sessionName: string,
+  position: "top" | "bottom" = "top",
+): void {
+  try {
+    execFileSync(
+      "tmux",
+      ["set-option", "-t", sessionName, "pane-border-status", position],
+      { stdio: "ignore" },
+    );
+  } catch {
+    // session may not exist yet
+  }
+}
+
+export function setPaneTitle(target: string, title: string): void {
+  try {
+    execFileSync("tmux", ["select-pane", "-t", target, "-T", title], {
+      stdio: "ignore",
+    });
+  } catch {
+    // pane may not exist
   }
 }
 
